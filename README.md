@@ -61,12 +61,11 @@ The scores are from the first run.
 
 Training graphs:
 
+<p float="left">
 <img src="https://image.ibb.co/ih8bT6/Collect_Mineral_Shards.png" width="360" height="300">
 <img src="https://preview.ibb.co/cCbfo6/Find_And_Defeat_Zerglings.png" width="360" height="300">
-<br>
-<img src="https://preview.ibb.co/cCbfo6/Find_And_Defeat_Zerglings.png" width="360" height="300">
 <img src="https://image.ibb.co/cRaZFm/Move_To_Beacon.png" width="360" height="300">
-
+</p>
 
 ### How to run
 `python run_a2c.py --map_name MoveToBeacon --model_name my_beacon_model --n_envs 32`
