@@ -1,0 +1,6 @@
+TODO
+- log more tensorboard stuff and do it properly
+- add the info-vector
+- lstm
+- episode-ends
+- maybe separate policy more from agent
