@@ -14,7 +14,7 @@ as specified in https://deepmind.com/documents/110/sc2le.pdf.
 
 Differences to the deepmind spec:
 - Use [A2C](https://blog.openai.com/baselines-acktr-a2c/) instead of [A3C](https://arxiv.org/abs/1602.01783)
-- The non-spatial feature-vector is discarded here.
+- The non-spatial feature-vector is discarded here. (Probably because of this can't learn CollectMineralsAndGas)
 - There are some other minor simplifaction to the observation space
 - Use different hyper-parameters
 - And maybe others that I don't know of
@@ -38,7 +38,7 @@ Differences to the deepmind spec:
     </tr>
     <tr>
       <td align="center">DefeatZerglingsAndBanelings</td>
-      <td align="center">~training~</td>
+      <td align="center">48</td>
       <td align="center">62</td>
     </tr>
     <tr>
@@ -48,16 +48,18 @@ Differences to the deepmind spec:
     </tr>
     <tr>
       <td align="center">DefeatRoaches</td>
-      <td align="center">~training~</td>
+      <td align="center">60</td>
       <td align="center">100</td>
     </tr>
 </table>
 
 - The averages are rough averages.
 - For all runs used the default parameters seen in the repo except number of environments.
-The scores are from the first run.
 - Deepmind scores from the  for FullyConv policy are shown for comparison.
 - The model wasn't able to learn CollectMineralsAndGas or BuildMarines
+
+It might be that the agent doing poorly in DefeatRoaches and DefeatZerglingsAndBanelings is due to quite different reward structure and scale in those games.
+Doing something like scaling down the rewards or giving less weight for value-loss might help.
 
 Training graphs:
 
