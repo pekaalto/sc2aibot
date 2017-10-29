@@ -26,14 +26,13 @@ flags.DEFINE_integer("K_batches", -1,
     "Number of training batches to run in thousands, use -1 to run forever")
 flags.DEFINE_string("map_name", "MoveToBeacon", "Name of a map to use.")
 flags.DEFINE_float("discount", 0.95, "Reward-discount for the agent")
-flags.DEFINE_float("scale_spatial_logits", 3.0,
-    "Make it more deterministic by scaling the spatial logits")
 flags.DEFINE_boolean("training", True,
     "if should train the model, if false then save only episode score summaries"
 )
 flags.DEFINE_enum("if_output_exists", "fail", ["fail", "overwrite", "continue"],
     "What to do if summary and model output exists, only for training, is ignored if notraining")
 flags.DEFINE_float("max_gradient_norm", 500.0, "good value might depend on the environment")
+flags.DEFINE_float("loss_value_weight", 1.0, "good value might depend on the environment")
 
 FLAGS(sys.argv)
 
@@ -78,10 +77,9 @@ agent = A2CAgent(
     sess=sess,
     spatial_dim=FLAGS.resolution,
     unit_type_emb_dim=5,
-    loss_value_weight=1.0,
+    loss_value_weight=FLAGS.loss_value_weight,
     entropy_weight_action_id=1e-6,
     entropy_weight_spatial=1e-6,
-    scale_spatial_logits=FLAGS.scale_spatial_logits,
     all_summary_freq=FLAGS.all_summary_freq,
     scalar_summary_freq=FLAGS.scalar_summary_freq,
     summary_path=full_summary_path,

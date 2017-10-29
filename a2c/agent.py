@@ -49,7 +49,6 @@ class A2CAgent:
             all_summary_freq,
             scalar_summary_freq,
             spatial_dim,
-            scale_spatial_logits=1.0,
             unit_type_emb_dim=4,
             loss_value_weight=1.0,
             entropy_weight_spatial=1e-6,
@@ -75,8 +74,6 @@ class A2CAgent:
         :param int all_summary_freq: how often save all summaries
         :param int scalar_summary_freq: int, how often save scalar summaries
         :param int spatial_dim: dimension for both minimap and screen
-        :param float scale_spatial_logits: scale the spatial-logits with this number
-            higer value gives more deterministic output. There is no theoretical foundation for this
         :param float loss_value_weight: value weight for a2c update
         :param float entropy_weight_spatial: spatial entropy weight for a2c update
         :param float entropy_weight_action_id: action selection entropy weight for a2c update
@@ -96,7 +93,6 @@ class A2CAgent:
         self.summary_writer = tf.summary.FileWriter(summary_path)
         self.all_summary_freq = all_summary_freq
         self.scalar_summary_freq = scalar_summary_freq
-        self.scale_spatial_logits = scale_spatial_logits
         self.train_step = 0
         self.max_gradient_norm = max_gradient_norm
 
@@ -186,7 +182,7 @@ class A2CAgent:
             stride=1,
             activation_fn=None,
             scope='spatial_action'
-        ) * self.scale_spatial_logits
+        )
 
         spatial_action_probs = tf.nn.softmax(layers.flatten(spatial_action_logits))
 
