@@ -17,9 +17,12 @@ Differences to the deepmind spec:
 - The non-spatial feature-vector is discarded here. (Probably because of this can't learn CollectMineralsAndGas)
 - There are some other minor simplifaction to the observation space
 - Use different hyper-parameters
+- For select rectangle we draw a rectangle of radius 5px around selected point (uncertain how deepmind does this)
+- Here we are not trying to learn any other function arguments except the spatial one
 - And maybe others that I don't know of
 
 ### Results
+
 <table align="center">
   <tr>
         <td align="center">Map</td>
@@ -48,18 +51,10 @@ Differences to the deepmind spec:
     </tr>
     <tr>
       <td align="center">DefeatRoaches</td>
-      <td align="center">60</td>
+      <td align="center">70-90</td>
       <td align="center">100</td>
     </tr>
 </table>
-
-- The averages are rough averages.
-- For all runs used the default parameters seen in the repo except number of environments.
-- Deepmind scores from the  for FullyConv policy are shown for comparison.
-- The model wasn't able to learn CollectMineralsAndGas or BuildMarines
-
-It might be that the agent doing poorly in DefeatRoaches and DefeatZerglingsAndBanelings is due to quite different reward structure and scale in those games.
-Doing something like scaling down the rewards or giving less weight for value-loss might help.
 
 Training graphs:
 
@@ -67,7 +62,24 @@ Training graphs:
 <img src="https://image.ibb.co/ih8bT6/Collect_Mineral_Shards.png" width="360" height="300">
 <img src="https://preview.ibb.co/cCbfo6/Find_And_Defeat_Zerglings.png" width="360" height="300">
 <img src="https://image.ibb.co/cRaZFm/Move_To_Beacon.png" width="360" height="300">
+<img src="https://image.ibb.co/m4qRfm/Defeat_Roaches.png" width="360" height="300">
+<img src="https://preview.ibb.co/kuY1D6/Defeat_Zerglings_And_Banelings.png" width="360" height="300">
 </p>
+
+
+* Used the default parameters seen in the repo except:
+  * DefeatRoaches, DefeatZerglinsAndBanelings entropy_weights 1e-4/1e-4, n_steps_per_batch 5
+  * Number of envs 32 or 64
+* Deepmind scores from the FullyConv policy in the release paper are shown for comparison.
+* The model here wasn't able to learn CollectMineralsAndGas or BuildMarines
+
+In DefeatRoaches and DefeatZerglingsAndBanelings the result is not stable.
+It took something like 5 runs the get the score for DefeatRoaches reported here.
+Also the scores for those are still considerably worse than Deepmind scores.
+Might be that at least hyperparameters here are off (and possibly other things).
+
+Other environments seem more stable.
+
 
 ### How to run
 `python run_a2c.py --map_name MoveToBeacon --model_name my_beacon_model --n_envs 32`

@@ -33,6 +33,8 @@ flags.DEFINE_enum("if_output_exists", "fail", ["fail", "overwrite", "continue"],
     "What to do if summary and model output exists, only for training, is ignored if notraining")
 flags.DEFINE_float("max_gradient_norm", 500.0, "good value might depend on the environment")
 flags.DEFINE_float("loss_value_weight", 1.0, "good value might depend on the environment")
+flags.DEFINE_float("entropy_weight_spatial", 1e-6, "entropy of spatial action distribution loss weight")
+flags.DEFINE_float("entropy_weight_action", 1e-6, "entropy of action-id distribution loss weight")
 
 FLAGS(sys.argv)
 
@@ -78,8 +80,8 @@ agent = A2CAgent(
     spatial_dim=FLAGS.resolution,
     unit_type_emb_dim=5,
     loss_value_weight=FLAGS.loss_value_weight,
-    entropy_weight_action_id=1e-6,
-    entropy_weight_spatial=1e-6,
+    entropy_weight_action_id=FLAGS.entropy_weight_action,
+    entropy_weight_spatial=FLAGS.entropy_weight_spatial,
     all_summary_freq=FLAGS.all_summary_freq,
     scalar_summary_freq=FLAGS.scalar_summary_freq,
     summary_path=full_summary_path,
