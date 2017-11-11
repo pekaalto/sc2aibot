@@ -38,108 +38,113 @@ flags.DEFINE_float("entropy_weight_action", 1e-6, "entropy of action-id distribu
 
 FLAGS(sys.argv)
 
-# TODO below it gets little messy with the folders, maybe do something more clever
+def main():
+    # TODO below it gets little messy with the folders, maybe do something more clever
 
-full_chekcpoint_path = os.path.join(FLAGS.checkpoint_path, FLAGS.model_name)
+    full_chekcpoint_path = os.path.join(FLAGS.checkpoint_path, FLAGS.model_name)
 
-if FLAGS.training:
-    full_summary_path = os.path.join(FLAGS.summary_path, FLAGS.model_name)
-else:
-    full_summary_path = os.path.join(FLAGS.summary_path, "no_training", FLAGS.model_name)
-
-
-def check_and_handle_existing_folder(f):
-    if os.path.exists(f):
-        if FLAGS.if_output_exists == "overwrite":
-            shutil.rmtree(f)
-            print("removed old folder in %s" % f)
-        elif FLAGS.if_output_exists == "fail":
-            raise Exception("folder %s already exists" % f)
-
-
-if FLAGS.training:
-    check_and_handle_existing_folder(full_chekcpoint_path)
-    check_and_handle_existing_folder(full_summary_path)
-
-env_args = dict(
-    map_name=FLAGS.map_name,
-    step_mul=FLAGS.step_mul,
-    game_steps_per_episode=0,
-    screen_size_px=(FLAGS.resolution,) * 2,
-    minimap_size_px=(FLAGS.resolution,) * 2,
-    visualize=FLAGS.visualize
-)
-
-envs = SubprocVecEnv((partial(make_sc2env, **env_args),) * FLAGS.n_envs)
-
-tf.reset_default_graph()
-sess = tf.Session()
-
-agent = A2CAgent(
-    sess=sess,
-    spatial_dim=FLAGS.resolution,
-    unit_type_emb_dim=5,
-    loss_value_weight=FLAGS.loss_value_weight,
-    entropy_weight_action_id=FLAGS.entropy_weight_action,
-    entropy_weight_spatial=FLAGS.entropy_weight_spatial,
-    all_summary_freq=FLAGS.all_summary_freq,
-    scalar_summary_freq=FLAGS.scalar_summary_freq,
-    summary_path=full_summary_path,
-    max_gradient_norm=FLAGS.max_gradient_norm
-)
-
-agent.build_model()
-if os.path.exists(full_chekcpoint_path):
-    agent.load(full_chekcpoint_path)
-else:
-    agent.init()
-
-runner = Runner(
-    envs=envs,
-    agent=agent,
-    discount=FLAGS.discount,
-    n_steps=FLAGS.n_steps_per_batch,
-    do_training=FLAGS.training
-)
-
-runner.reset()
-
-if FLAGS.K_batches >= 0:
-    n_batches = FLAGS.K_batches * 1000
-else:
-    n_batches = -1
-
-
-def _print(i):
-    print(datetime.now())
-    print("# batch %d" % i)
-    sys.stdout.flush()
-
-
-def _save_if_training():
     if FLAGS.training:
-        agent.save(full_chekcpoint_path)
-        agent.flush_summaries()
+        full_summary_path = os.path.join(FLAGS.summary_path, FLAGS.model_name)
+    else:
+        full_summary_path = os.path.join(FLAGS.summary_path, "no_training", FLAGS.model_name)
+
+
+    def check_and_handle_existing_folder(f):
+        if os.path.exists(f):
+            if FLAGS.if_output_exists == "overwrite":
+                shutil.rmtree(f)
+                print("removed old folder in %s" % f)
+            elif FLAGS.if_output_exists == "fail":
+                raise Exception("folder %s already exists" % f)
+
+
+    if FLAGS.training:
+        check_and_handle_existing_folder(full_chekcpoint_path)
+        check_and_handle_existing_folder(full_summary_path)
+
+    env_args = dict(
+        map_name=FLAGS.map_name,
+        step_mul=FLAGS.step_mul,
+        game_steps_per_episode=0,
+        screen_size_px=(FLAGS.resolution,) * 2,
+        minimap_size_px=(FLAGS.resolution,) * 2,
+        visualize=FLAGS.visualize
+    )
+
+    envs = SubprocVecEnv((partial(make_sc2env, **env_args),) * FLAGS.n_envs)
+
+    tf.reset_default_graph()
+    sess = tf.Session()
+
+    agent = A2CAgent(
+        sess=sess,
+        spatial_dim=FLAGS.resolution,
+        unit_type_emb_dim=5,
+        loss_value_weight=FLAGS.loss_value_weight,
+        entropy_weight_action_id=FLAGS.entropy_weight_action,
+        entropy_weight_spatial=FLAGS.entropy_weight_spatial,
+        all_summary_freq=FLAGS.all_summary_freq,
+        scalar_summary_freq=FLAGS.scalar_summary_freq,
+        summary_path=full_summary_path,
+        max_gradient_norm=FLAGS.max_gradient_norm
+    )
+
+    agent.build_model()
+    if os.path.exists(full_chekcpoint_path):
+        agent.load(full_chekcpoint_path)
+    else:
+        agent.init()
+
+    runner = Runner(
+        envs=envs,
+        agent=agent,
+        discount=FLAGS.discount,
+        n_steps=FLAGS.n_steps_per_batch,
+        do_training=FLAGS.training
+    )
+
+    runner.reset()
+
+    if FLAGS.K_batches >= 0:
+        n_batches = FLAGS.K_batches * 1000
+    else:
+        n_batches = -1
+
+
+    def _print(i):
+        print(datetime.now())
+        print("# batch %d" % i)
         sys.stdout.flush()
 
 
-i = 0
+    def _save_if_training():
+        if FLAGS.training:
+            agent.save(full_chekcpoint_path)
+            agent.flush_summaries()
+            sys.stdout.flush()
 
-try:
-    while True:
-        if i % 500 == 0:
-            _print(i)
-        if i % 4000 == 0:
-            _save_if_training()
-        runner.run_batch()
-        i += 1
-        if 0 <= n_batches <= i:
-            break
-except KeyboardInterrupt:
-    pass
 
-print("Okay. Work is done")
-_print(i)
-_save_if_training()
+    i = 0
 
-envs.close()
+    try:
+        while True:
+            if i % 500 == 0:
+                _print(i)
+            if i % 4000 == 0:
+                _save_if_training()
+            runner.run_batch()
+            i += 1
+            if 0 <= n_batches <= i:
+                break
+    except KeyboardInterrupt:
+        pass
+
+    print("Okay. Work is done")
+    _print(i)
+    _save_if_training()
+
+    envs.close()
+
+
+if __name__ == '__main__':
+    main()
