@@ -26,7 +26,7 @@ def calculate_n_step_reward(
         discount: float,
         last_state_values: np.ndarray):
     """
-    :param one_step_rewards: [n_env, n_batch]
+    :param one_step_rewards: [n_env, n_timesteps]
     :param discount: scalar discount paramater
     :param last_state_values: [n_env], bootstrap from these if not done
     :return:
@@ -36,6 +36,34 @@ def calculate_n_step_reward(
     reverse_rewards = np.c_[one_step_rewards, last_state_values][:, ::-1]
     full_discounted_reverse_rewards = reverse_rewards * discount
     return (np.cumsum(full_discounted_reverse_rewards, axis=1) / discount)[:, :0:-1]
+
+
+def general_n_step_advantage(
+        one_step_rewards: np.ndarray,
+        value_estimates: np.ndarray,
+        discount: float,
+        lambda_par: float
+):
+    """
+    :param one_step_rewards: [n_env, n_timesteps]
+    :param value_estimates: [n_env, n_timesteps + 1]
+    :param discount: "gamma" in https://arxiv.org/pdf/1707.06347.pdf and most of the rl-literature
+    :param lambda_par: lambda in https://arxiv.org/pdf/1707.06347.pdf
+    :return:
+    """
+    assert 0.0 < discount <= 1.0
+    assert 0.0 <= lambda_par <= 1.0
+    batch_size, timesteps = one_step_rewards.shape
+    assert value_estimates.shape == (batch_size, timesteps + 1)
+    delta = one_step_rewards + discount * value_estimates[:, 1:] - value_estimates[:, :-1]
+
+    if lambda_par == 0:
+        return delta
+
+    delta_rev = delta[:, ::-1]
+    adjustment = (discount * lambda_par) ** np.arange(timesteps, 0, -1)
+    advantage = (np.cumsum(delta_rev * adjustment, axis=1) / adjustment)[:, ::-1]
+    return advantage
 
 
 def combine_first_dimensions(x: np.ndarray):
@@ -51,3 +79,10 @@ def combine_first_dimensions(x: np.ndarray):
 
 def ravel_index_pairs(idx_pairs, n_col):
     return tf.reduce_sum(idx_pairs * np.array([n_col, 1])[np.newaxis, ...], axis=1)
+
+
+def dict_of_lists_to_list_of_dicst(x: dict):
+    dim = {len(v) for v in x.values()}
+    assert len(dim) == 1
+    dim = dim.pop()
+    return [{k: x[k][i] for k in x} for i in range(dim)]

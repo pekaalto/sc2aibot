@@ -1,3 +1,5 @@
+from collections import namedtuple
+
 import numpy as np
 from pysc2.env.environment import TimeStep, StepType
 from pysc2.lib import actions
@@ -80,12 +82,14 @@ class ObsProcesser:
     def process_one_input(self, timestep: TimeStep):
         obs = timestep.observation
         pp_obs = {
-            "screen_numeric": self.get_screen_numeric(obs),
-            "screen_unit_type": obs["screen"][SCREEN_FEATURES.unit_type.index],
-            "minimap_numeric": self.get_mimimap_numeric(obs),
-            "available_actions": get_available_actions_flags(obs),
-            "player_relative_screen": obs["screen"][SCREEN_FEATURES.player_relative.index],
-            "player_relative_minimap": obs["minimap"][MINIMAP_FEATURES.player_relative.index]
+            FEATURE_KEYS.screen_numeric: self.get_screen_numeric(obs),
+            FEATURE_KEYS.screen_unit_type: obs["screen"][SCREEN_FEATURES.unit_type.index],
+            FEATURE_KEYS.minimap_numeric: self.get_mimimap_numeric(obs),
+            FEATURE_KEYS.available_action_ids: get_available_actions_flags(obs),
+            FEATURE_KEYS.player_relative_screen: obs["screen"][
+                SCREEN_FEATURES.player_relative.index],
+            FEATURE_KEYS.player_relative_minimap: obs["minimap"][
+                MINIMAP_FEATURES.player_relative.index]
         }
 
         return pp_obs
@@ -176,7 +180,27 @@ class ActionProcesser:
 
     def combine_batch(self, mb_actions):
         d = {}
-        d["action_id"] = np.stack(k[0] for k in mb_actions)
-        d["spatial_action"] = np.stack(k[1] for k in mb_actions)
-        d["is_spatial_action_available"] = self.is_spatial[d["action_id"]]
+        d[FEATURE_KEYS.selected_action_id] = np.stack(k[0] for k in mb_actions)
+        d[FEATURE_KEYS.selected_spatial_action] = np.stack(k[1] for k in mb_actions)
+        d[FEATURE_KEYS.is_spatial_action_available] = self.is_spatial[
+            d[FEATURE_KEYS.selected_action_id]
+        ]
         return d
+
+
+FEATURE_LIST = (
+    "minimap_numeric",
+    "screen_numeric",
+    "screen_unit_type",
+    "is_spatial_action_available",
+    "selected_spatial_action",
+    "selected_action_id",
+    "available_action_ids",
+    "value_target",
+    "advantage",
+    "player_relative_screen",
+    "player_relative_minimap"
+)
+
+AgentInputTuple = namedtuple("AgentInputTuple", FEATURE_LIST)
+FEATURE_KEYS = AgentInputTuple(*FEATURE_LIST)

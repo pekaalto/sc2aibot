@@ -1,11 +1,30 @@
+import unittest
+
 import numpy as np
 import tensorflow as tf
 from common.util import (
     weighted_random_sample, select_from_each_row, calculate_n_step_reward, combine_first_dimensions,
-    ravel_index_pairs)
+    ravel_index_pairs, general_n_step_advantage, dict_of_lists_to_list_of_dicst)
 
 
 class TestUtil(tf.test.TestCase):
+    def test_dict_list_transpose(self):
+        x = {
+            "a": [1, 2, 3],
+            "b": [np.array([5, 6]), np.array([7, 8]), np.array([90, 100])]
+        }
+        result = dict_of_lists_to_list_of_dicst(x)
+        expected = [
+            {'a': 1, 'b': np.array([5, 6])},
+            {'a': 2, 'b': np.array([7, 8])},
+            {'a': 3, 'b': np.array([90, 100])}
+        ]
+        assert len(result) == len(expected)
+        for r, e in zip(expected, result):
+            assert r.keys() == e.keys()
+            assert r["a"] == e["a"]
+            self.assertAllEqual(r["b"], e["b"])
+
     def test_weighted_random_sample(self):
 
         probs = np.array([
@@ -121,3 +140,128 @@ class TestUtil(tf.test.TestCase):
             self.assertAllEqual(x.reshape(3, -1)[np.arange(3), flat_idx], expected_slice)
             self.assertAllEqual(flat_idx, [14, 27, 42])
             assert (wrong_idx != flat_idx).sum() > 0
+
+
+class TestGeneralNStepAdvantage(tf.test.TestCase):
+    def test_gamma_one(self):
+        """
+        compare to simpler calculation when lambda = 1
+        """
+
+        value_estimates = np.random.rand(5, 11)
+        one_step_rewards = np.random.rand(5, 10)
+        discount = 0.76
+
+        a1 = general_n_step_advantage(
+            one_step_rewards,
+            value_estimates,
+            discount=discount,
+            lambda_par=1.0
+        )
+
+        a2 = calculate_n_step_reward(
+            one_step_rewards,
+            discount=discount,
+            last_state_values=value_estimates[:, -1]
+        ) - value_estimates[:, :-1]
+
+        self.assertAllClose(a1, a2)
+
+    def test_gamma_zero(self):
+        value_estimates = np.random.rand(5, 11) * 10
+        one_step_rewards = np.random.rand(5, 10) * 10
+        discount = 0.76
+
+        a1 = general_n_step_advantage(
+            one_step_rewards,
+            value_estimates,
+            discount=discount,
+            lambda_par=1e-7
+        )
+
+        a2 = general_n_step_advantage(
+            one_step_rewards,
+            value_estimates,
+            discount=discount,
+            lambda_par=0.0
+        )
+
+        a3 = one_step_rewards + discount * value_estimates[:, 1:] - value_estimates[:, :-1]
+
+        self.assertAllClose(a1, a3, rtol=1e-4, atol=1e-4)
+        self.assertAllClose(a2, a3)
+
+    def test_general(self):
+        value_estimates = np.array([1, 1.5, 0.5, 2.0])
+        one_step_rewards = np.array([-1, 2.0, 5.0])
+        discount = 0.75
+        lambda_par = 0.5
+        # delta_t = r_t + gamma*V_{t+1} - V_{t}
+        # A_t = delta_t + (gamma * lambda)**1 delta_{t+1} + ... + (gamma * lambda)**(T - t + 1) delta_{T - 1}
+        # T = len(one_step_rewards) + 1
+        deltas = np.zeros(3)
+        for i in range(3):
+            deltas[i] = one_step_rewards[i] + discount * value_estimates[i + 1] - value_estimates[i]
+
+        expected_advantages = np.zeros(3)
+        expected_advantages[0] = (
+            deltas[0] +
+            (discount * lambda_par) * deltas[1] +
+            (discount * lambda_par) ** 2 * deltas[2]
+        )
+        expected_advantages[1] = (
+            deltas[1] +
+            (discount * lambda_par) * deltas[2]
+        )
+        expected_advantages[2] = deltas[2]
+
+        a = general_n_step_advantage(
+            one_step_rewards[np.newaxis, ...],
+            value_estimates[np.newaxis, ...],
+            discount=discount,
+            lambda_par=lambda_par
+        )
+        assert a.shape == (1, 3)
+        self.assertAllClose(expected_advantages, a[0])
+
+    def test_general_batch(self):
+        value_estimates = np.random.rand(3, 11) * 10
+        one_step_rewards = np.random.rand(3, 10) * 10
+
+        discount = 0.84
+        lambda_par = 0.45
+
+        a1 = general_n_step_advantage(
+            one_step_rewards,
+            value_estimates,
+            discount=discount,
+            lambda_par=lambda_par
+        )
+
+        a2 = general_n_step_advantage(
+            one_step_rewards[[1]],
+            value_estimates[[1]],
+            discount=discount,
+            lambda_par=lambda_par
+        )
+
+        self.assertAllClose(a1[[1]], a2)
+
+    def test_general_n_step_advantage_3(self):
+        # 1 dimensional input
+        with self.assertRaises(Exception):
+            general_n_step_advantage(
+                np.random.rand(10),
+                np.random.rand(11),
+                discount=1.0,
+                lambda_par=1.0
+            )
+
+        # wrong input dim
+        with self.assertRaises(Exception):
+            general_n_step_advantage(
+                np.random.rand(2, 5),
+                np.random.rand(2, 5),
+                discount=1.0,
+                lambda_par=1.0
+            )

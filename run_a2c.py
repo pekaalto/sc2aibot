@@ -7,16 +7,17 @@ from datetime import datetime
 from functools import partial
 import tensorflow as tf
 from absl import flags
-from a2c.agent import A2CAgent
-from a2c.runner import Runner
-from common.multienv import SubprocVecEnv, make_sc2env
+from a2c.agent import ActorCriticAgent, ACMode
+from a2c.runner import Runner, PPORunParams
+from common.multienv import SubprocVecEnv, make_sc2env, SingleEnv
 
 FLAGS = flags.FLAGS
 flags.DEFINE_bool("visualize", False, "Whether to render with pygame.")
 flags.DEFINE_integer("resolution", 32, "Resolution for screen and minimap feature layers.")
 flags.DEFINE_integer("step_mul", 8, "Game steps per agent step.")
 flags.DEFINE_integer("n_envs", 1, "Number of environments to run in parallel")
-flags.DEFINE_integer("n_steps_per_batch", 8, "Number of steps per batch")
+flags.DEFINE_integer("n_steps_per_batch", None,
+    "Number of steps per batch, if None use 8 for a2c and 128 for ppo")
 flags.DEFINE_integer("all_summary_freq", 50, "Record all summaries every n batch")
 flags.DEFINE_integer("scalar_summary_freq", 5, "Record scalar summaries every n batch")
 flags.DEFINE_string("checkpoint_path", "_files/models", "Path for agent checkpoints")
@@ -33,8 +34,13 @@ flags.DEFINE_enum("if_output_exists", "fail", ["fail", "overwrite", "continue"],
     "What to do if summary and model output exists, only for training, is ignored if notraining")
 flags.DEFINE_float("max_gradient_norm", 500.0, "good value might depend on the environment")
 flags.DEFINE_float("loss_value_weight", 1.0, "good value might depend on the environment")
-flags.DEFINE_float("entropy_weight_spatial", 1e-6, "entropy of spatial action distribution loss weight")
+flags.DEFINE_float("entropy_weight_spatial", 1e-6,
+    "entropy of spatial action distribution loss weight")
 flags.DEFINE_float("entropy_weight_action", 1e-6, "entropy of action-id distribution loss weight")
+flags.DEFINE_float("ppo_lambda", 0.95, "lambda parameter for ppo")
+flags.DEFINE_integer("ppo_batch_size", None, "batch size for ppo, if None use n_steps_per_batch")
+flags.DEFINE_integer("ppo_epochs", 3, "epochs per update")
+flags.DEFINE_enum("agent_mode", ACMode.A2C, [ACMode.A2C, ACMode.PPO], "if should use A2C or PPO")
 
 FLAGS(sys.argv)
 
@@ -71,19 +77,21 @@ env_args = dict(
 )
 
 envs = SubprocVecEnv((partial(make_sc2env, **env_args),) * FLAGS.n_envs)
+# envs = SingleEnv(make_sc2env(**env_args))
 
 tf.reset_default_graph()
 sess = tf.Session()
 
-agent = A2CAgent(
+agent = ActorCriticAgent(
+    mode=FLAGS.agent_mode,
     sess=sess,
     spatial_dim=FLAGS.resolution,
     unit_type_emb_dim=5,
     loss_value_weight=FLAGS.loss_value_weight,
     entropy_weight_action_id=FLAGS.entropy_weight_action,
     entropy_weight_spatial=FLAGS.entropy_weight_spatial,
-    all_summary_freq=FLAGS.all_summary_freq,
     scalar_summary_freq=FLAGS.scalar_summary_freq,
+    all_summary_freq=FLAGS.all_summary_freq,
     summary_path=full_summary_path,
     max_gradient_norm=FLAGS.max_gradient_norm
 )
@@ -94,12 +102,27 @@ if os.path.exists(full_chekcpoint_path):
 else:
     agent.init()
 
+if FLAGS.n_steps_per_batch is None:
+    n_steps_per_batch = 128 if FLAGS.agent_mode == ACMode.PPO else 8
+else:
+    n_steps_per_batch = FLAGS.n_steps_per_batch
+
+if FLAGS.agent_mode == ACMode.PPO:
+    ppo_par = PPORunParams(
+        FLAGS.ppo_lambda,
+        batch_size=FLAGS.ppo_batch_size or n_steps_per_batch,
+        n_epochs=FLAGS.ppo_epochs
+    )
+else:
+    ppo_par = None
+
 runner = Runner(
     envs=envs,
     agent=agent,
     discount=FLAGS.discount,
-    n_steps=FLAGS.n_steps_per_batch,
-    do_training=FLAGS.training
+    n_steps=n_steps_per_batch,
+    do_training=FLAGS.training,
+    ppo_par=ppo_par
 )
 
 runner.reset()

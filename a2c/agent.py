@@ -1,54 +1,55 @@
+import collections
 import os
+
 import numpy as np
 import tensorflow as tf
 from pysc2.lib import actions
 from pysc2.lib.features import SCREEN_FEATURES, MINIMAP_FEATURES
-from tensorflow.contrib import framework
 from tensorflow.contrib import layers
 from tensorflow.contrib.layers.python.layers.optimizers import OPTIMIZER_SUMMARIES
-from common.preprocess import ObsProcesser
-from common.util import weighted_random_sample, select_from_each_row, combine_first_dimensions, \
-    ravel_index_pairs
+from common.preprocess import ObsProcesser, FEATURE_KEYS, AgentInputTuple
+from common.util import weighted_random_sample, select_from_each_row, ravel_index_pairs
 
 
-def _build_convs(inputs, name):
-    """
-    helper method for building screen and minimap conv networks
-    """
-    conv1 = layers.conv2d(
-        inputs=inputs,
-        data_format="NHWC",
-        num_outputs=16,
-        kernel_size=5,
-        stride=1,
-        padding='SAME',
-        activation_fn=tf.nn.relu,
-        scope="%s/conv1" % name
-    )
-    conv2 = layers.conv2d(
-        inputs=conv1,
-        data_format="NHWC",
-        num_outputs=32,
-        kernel_size=3,
-        stride=1,
-        padding='SAME',
-        activation_fn=tf.nn.relu,
-        scope="%s/conv2" % name
+def _get_placeholders(spatial_dim):
+    sd = spatial_dim
+    feature_list = [
+        (FEATURE_KEYS.minimap_numeric, tf.float32, [None, sd, sd, ObsProcesser.N_MINIMAP_CHANNELS]),
+        (FEATURE_KEYS.screen_numeric, tf.float32, [None, sd, sd, ObsProcesser.N_SCREEN_CHANNELS]),
+        (FEATURE_KEYS.screen_unit_type, tf.int32, [None, sd, sd]),
+        (FEATURE_KEYS.is_spatial_action_available, tf.float32, [None]),
+        (FEATURE_KEYS.available_action_ids, tf.float32, [None, len(actions.FUNCTIONS)]),
+        (FEATURE_KEYS.selected_spatial_action, tf.int32, [None, 2]),
+        (FEATURE_KEYS.selected_action_id, tf.int32, [None]),
+        (FEATURE_KEYS.value_target, tf.float32, [None]),
+        (FEATURE_KEYS.player_relative_screen, tf.int32, [None, sd, sd]),
+        (FEATURE_KEYS.player_relative_minimap, tf.int32, [None, sd, sd]),
+        (FEATURE_KEYS.advantage, tf.float32, [None])
+    ]
+    return AgentInputTuple(
+        **{name: tf.placeholder(dtype, shape, name) for name, dtype, shape in feature_list}
     )
 
-    layers.summarize_activation(conv1)
-    layers.summarize_activation(conv2)
 
-    return conv2
+class ACMode:
+    A2C = "a2c"
+    PPO = "ppo"
 
 
-class A2CAgent:
+SelectedLogProbs = collections.namedtuple("SelectedLogProbs", ["action_id", "spatial", "total"])
+
+
+class ActorCriticAgent:
+    _scalar_summary_key = "scalar_summaries"
+
     def __init__(self,
             sess,
             summary_path,
             all_summary_freq,
             scalar_summary_freq,
             spatial_dim,
+            mode,
+            clip_epsilon=0.2,
             unit_type_emb_dim=4,
             loss_value_weight=1.0,
             entropy_weight_spatial=1e-6,
@@ -82,6 +83,8 @@ class A2CAgent:
         """
 
         assert optimiser in ["adam", "rmsprop"]
+        assert mode in [ACMode.A2C, ACMode.PPO]
+        self.mode = mode
         self.sess = sess
         self.spatial_dim = spatial_dim
         self.loss_value_weight = loss_value_weight
@@ -95,6 +98,7 @@ class A2CAgent:
         self.scalar_summary_freq = scalar_summary_freq
         self.train_step = 0
         self.max_gradient_norm = max_gradient_norm
+        self.clip_epsilon = clip_epsilon
 
         opt_class = tf.train.AdamOptimizer if optimiser == "adam" else tf.train.RMSPropOptimizer
         if optimiser_pars is None:
@@ -113,152 +117,90 @@ class A2CAgent:
 
     def init(self):
         self.sess.run(self.init_op)
+        if self.mode == ACMode.PPO:
+            self.update_theta()
 
-    def reset(self):
-        pass
-
-    def _define_input_placeholders(self):
-        self.ph_minimap_numeric = tf.placeholder(tf.float32,
-            [None, self.spatial_dim, self.spatial_dim, ObsProcesser.N_MINIMAP_CHANNELS],
-            name='minimap_numeric')
-        self.ph_screen_numeric = tf.placeholder(tf.float32,
-            [None, self.spatial_dim, self.spatial_dim, ObsProcesser.N_SCREEN_CHANNELS],
-            name='screen_numeric')
-        self.ph_screen_unit_type = tf.placeholder(tf.int32,
-            [None, self.spatial_dim, self.spatial_dim],
-            name="screen_unit_type"
+    def _get_select_action_probs(self, pi, selected_spatial_action_flat):
+        action_id = select_from_each_row(
+            pi.action_id_log_probs, self.placeholders.selected_action_id
         )
-        self.ph_is_spatial_action_available = tf.placeholder(tf.float32, [None],
-            name='is_spatial_action_available')
-        self.ph_available_action_ids = tf.placeholder(tf.float32,
-            [None, len(actions.FUNCTIONS)], name='available_action_ids')
-        self.ph_selected_spatial_action = tf.placeholder(tf.int32, [None, 2],
-            name='selected_spatial_action')
-        self.ph_selected_action_id = tf.placeholder(tf.int32, [None],
-            name="selected_action_id")
-        self.ph_value_target = tf.placeholder(tf.float32, [None], name='value_target')
-        self.ph_player_relative_screen = tf.placeholder(tf.int32,
-            [None, self.spatial_dim, self.spatial_dim], name="player_relative_screen")
-        self.ph_player_relative_minimap = tf.placeholder(tf.int32,
-            [None, self.spatial_dim, self.spatial_dim], name="player_relative_minimap")
-
-    def _build_fullyconv_network(self):
-        units_embedded = layers.embed_sequence(
-            self.ph_screen_unit_type,
-            vocab_size=SCREEN_FEATURES.unit_type.scale,
-            embed_dim=self.unit_type_emb_dim,
-            scope="unit_type_emb"
+        spatial = select_from_each_row(
+            pi.spatial_action_log_probs, selected_spatial_action_flat
         )
+        total = spatial + action_id
 
-        # Let's not one-hot zero which is background
-        player_relative_screen_one_hot = layers.one_hot_encoding(
-            self.ph_player_relative_screen,
-            num_classes=SCREEN_FEATURES.player_relative.scale
-        )[:, :, :, 1:]
-        player_relative_minimap_one_hot = layers.one_hot_encoding(
-            self.ph_player_relative_minimap,
-            num_classes=MINIMAP_FEATURES.player_relative.scale
-        )[:, :, :, 1:]
+        return SelectedLogProbs(action_id, spatial, total)
 
-        channel_axis = 3
-        screen_numeric_all = tf.concat(
-            [self.ph_screen_numeric, units_embedded, player_relative_screen_one_hot],
-            axis=channel_axis
-        )
-        minimap_numeric_all = tf.concat(
-            [self.ph_minimap_numeric, player_relative_minimap_one_hot],
-            axis=channel_axis
-        )
-        screen_output = _build_convs(screen_numeric_all, "screen_network")
-        minimap_output = _build_convs(minimap_numeric_all, "minimap_network")
-
-        map_output = tf.concat([screen_output, minimap_output], axis=channel_axis)
-
-        spatial_action_logits = layers.conv2d(
-            map_output,
-            data_format="NHWC",
-            num_outputs=1,
-            kernel_size=1,
-            stride=1,
-            activation_fn=None,
-            scope='spatial_action'
-        )
-
-        spatial_action_probs = tf.nn.softmax(layers.flatten(spatial_action_logits))
-
-        map_output_flat = layers.flatten(map_output)
-
-        fc1 = layers.fully_connected(
-            map_output_flat,
-            num_outputs=256,
-            activation_fn=tf.nn.relu,
-            scope="fc1"
-        )
-        action_id_probs = layers.fully_connected(
-            fc1,
-            num_outputs=len(actions.FUNCTIONS),
-            activation_fn=tf.nn.softmax,
-            scope="action_id"
-        )
-        value_estimate = tf.squeeze(layers.fully_connected(
-            fc1,
-            num_outputs=1,
-            activation_fn=None,
-            scope='value'
-        ), axis=1)
-
-        # disregard non-allowed actions by setting zero prob and re-normalizing to 1
-        action_id_probs *= self.ph_available_action_ids
-        action_id_probs /= tf.reduce_sum(action_id_probs, axis=1, keep_dims=True)
-
-        return spatial_action_probs, action_id_probs, value_estimate
+    def _scalar_summary(self, name, tensor):
+        tf.summary.scalar(name, tensor,
+            collections=[tf.GraphKeys.SUMMARIES, self._scalar_summary_key])
 
     def build_model(self):
-        self._define_input_placeholders()
+        self.placeholders = _get_placeholders(self.spatial_dim)
 
-        spatial_action_probs, action_id_probs, value_estimate = \
-            self._build_fullyconv_network()
+        with tf.variable_scope("theta"):
+            theta = FullyConvPolicy(self, trainable=True).build()
 
         selected_spatial_action_flat = ravel_index_pairs(
-            self.ph_selected_spatial_action, self.spatial_dim
+            self.placeholders.selected_spatial_action, self.spatial_dim
         )
 
-        def logclip(x):
-            return tf.log(tf.clip_by_value(x, 1e-12, 1.0))
-
-        spatial_action_log_probs = (
-            logclip(spatial_action_probs)
-            * tf.expand_dims(self.ph_is_spatial_action_available, axis=1)
-        )
-
-        # non-available actions get log(1e-10) value but that's ok because it's never used        
-        action_id_log_probs = logclip(action_id_probs)
-
-        selected_spatial_action_log_prob = select_from_each_row(
-            spatial_action_log_probs, selected_spatial_action_flat
-        )
-        selected_action_id_log_prob = select_from_each_row(
-            action_id_log_probs, self.ph_selected_action_id
-        )
-        selected_action_total_log_prob = (
-            selected_spatial_action_log_prob
-            + selected_action_id_log_prob
-        )
+        selected_log_probs = self._get_select_action_probs(theta, selected_spatial_action_flat)
 
         # maximum is to avoid 0 / 0 because this is used to calculate some means
         sum_spatial_action_available = tf.maximum(
-            1e-10, tf.reduce_sum(self.ph_is_spatial_action_available)
+            1e-10, tf.reduce_sum(self.placeholders.is_spatial_action_available)
         )
+
         neg_entropy_spatial = tf.reduce_sum(
-            spatial_action_probs * spatial_action_log_probs
+            theta.spatial_action_probs * theta.spatial_action_log_probs
         ) / sum_spatial_action_available
         neg_entropy_action_id = tf.reduce_mean(tf.reduce_sum(
-            action_id_probs * action_id_log_probs, axis=1
+            theta.action_id_probs * theta.action_id_log_probs, axis=1
         ))
 
-        advantage = tf.stop_gradient(self.ph_value_target - value_estimate)
-        policy_loss = -tf.reduce_mean(selected_action_total_log_prob * advantage)
-        value_loss = tf.losses.mean_squared_error(self.ph_value_target, value_estimate)
+        if self.mode == ACMode.PPO:
+            # could also use stop_gradient and forget about the trainable
+            with tf.variable_scope("theta_old"):
+                theta_old = FullyConvPolicy(self, trainable=False).build()
+
+            new_theta_var = tf.global_variables("theta/")
+            old_theta_var = tf.global_variables("theta_old/")
+
+            assert len(tf.trainable_variables("theta/")) == len(new_theta_var)
+            assert not tf.trainable_variables("theta_old/")
+            assert len(old_theta_var) == len(new_theta_var)
+
+            self.update_theta_op = [
+                tf.assign(t_old, t_new) for t_new, t_old in zip(new_theta_var, old_theta_var)
+            ]
+
+            selected_log_probs_old = self._get_select_action_probs(
+                theta_old, selected_spatial_action_flat
+            )
+            ratio = tf.exp(selected_log_probs.total - selected_log_probs_old.total)
+            clipped_ratio = tf.clip_by_value(
+                ratio, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon
+            )
+            l_clip = tf.minimum(
+                ratio * self.placeholders.advantage,
+                clipped_ratio * self.placeholders.advantage
+            )
+            self.sampled_action_id = weighted_random_sample(theta_old.action_id_probs)
+            self.sampled_spatial_action = weighted_random_sample(theta_old.spatial_action_probs)
+            self.value_estimate = theta_old.value_estimate
+            self._scalar_summary("action/ratio", tf.reduce_mean(clipped_ratio))
+            self._scalar_summary("action/ratio_is_clipped",
+                tf.reduce_mean(tf.to_float(tf.equal(ratio, clipped_ratio))))
+            policy_loss = -tf.reduce_mean(l_clip)
+        else:
+            self.sampled_action_id = weighted_random_sample(theta.action_id_probs)
+            self.sampled_spatial_action = weighted_random_sample(theta.spatial_action_probs)
+            self.value_estimate = theta.value_estimate
+            policy_loss = -tf.reduce_mean(selected_log_probs.total * self.placeholders.advantage)
+
+        value_loss = tf.losses.mean_squared_error(
+            self.placeholders.value_target, theta.value_estimate)
 
         loss = (
             policy_loss
@@ -267,35 +209,9 @@ class A2CAgent:
             + neg_entropy_action_id * self.entropy_weight_action_id
         )
 
-        scalar_summary_collection_name = "scalar_summaries"
-        s_collections = [scalar_summary_collection_name, tf.GraphKeys.SUMMARIES]
-        tf.summary.scalar("loss/policy", policy_loss, collections=s_collections)
-        tf.summary.scalar("loss/value", value_loss, s_collections)
-        tf.summary.scalar("loss/neg_entropy_spatial", neg_entropy_spatial, s_collections)
-        tf.summary.scalar("loss/neg_entropy_action_id", neg_entropy_action_id, s_collections)
-        tf.summary.scalar("loss/total", loss, s_collections)
-        tf.summary.scalar("value/advantage", tf.reduce_mean(advantage), s_collections)
-        tf.summary.scalar("value/estimate", tf.reduce_mean(value_estimate), s_collections)
-        tf.summary.scalar("value/target", tf.reduce_mean(self.ph_value_target), s_collections)
-        tf.summary.scalar("action/is_spatial_action_available",
-            tf.reduce_mean(self.ph_is_spatial_action_available), s_collections)
-        tf.summary.scalar("action/is_spatial_action_available",
-            tf.reduce_mean(self.ph_is_spatial_action_available), s_collections)
-        tf.summary.scalar("action/selected_id_log_prob",
-            tf.reduce_mean(selected_action_id_log_prob))
-        tf.summary.scalar("action/selected_total_log_prob",
-            tf.reduce_mean(selected_action_total_log_prob))
-        tf.summary.scalar("action/selected_spatial_log_prob",
-            tf.reduce_sum(selected_spatial_action_log_prob) / sum_spatial_action_available
-        )
-
-        self.sampled_action_id = weighted_random_sample(action_id_probs)
-        self.sampled_spatial_action = weighted_random_sample(spatial_action_probs)
-        self.value_estimate = value_estimate
-
         self.train_op = layers.optimize_loss(
             loss=loss,
-            global_step=framework.get_global_step(),
+            global_step=tf.train.get_global_step(),
             optimizer=self.optimiser,
             clip_gradients=self.max_gradient_norm,
             summaries=OPTIMIZER_SUMMARIES,
@@ -303,26 +219,36 @@ class A2CAgent:
             name="train_op"
         )
 
+        self._scalar_summary("value/estimate", tf.reduce_mean(self.value_estimate))
+        self._scalar_summary("value/target", tf.reduce_mean(self.placeholders.value_target))
+        self._scalar_summary("action/is_spatial_action_available",
+            tf.reduce_mean(self.placeholders.is_spatial_action_available))
+        self._scalar_summary("action/selected_id_log_prob",
+            tf.reduce_mean(selected_log_probs.action_id))
+        self._scalar_summary("loss/policy", policy_loss)
+        self._scalar_summary("loss/value", value_loss)
+        self._scalar_summary("loss/neg_entropy_spatial", neg_entropy_spatial)
+        self._scalar_summary("loss/neg_entropy_action_id", neg_entropy_action_id)
+        self._scalar_summary("loss/total", loss)
+        self._scalar_summary("value/advantage", tf.reduce_mean(self.placeholders.advantage))
+        self._scalar_summary("action/selected_total_log_prob",
+            tf.reduce_mean(selected_log_probs.total))
+        self._scalar_summary("action/selected_spatial_log_prob",
+            tf.reduce_sum(selected_log_probs.spatial) / sum_spatial_action_available)
+
         self.init_op = tf.global_variables_initializer()
         self.saver = tf.train.Saver(max_to_keep=2)
         self.all_summary_op = tf.summary.merge_all(tf.GraphKeys.SUMMARIES)
-        self.scalar_summary_op = tf.summary.merge(tf.get_collection(scalar_summary_collection_name))
+        self.scalar_summary_op = tf.summary.merge(tf.get_collection(self._scalar_summary_key))
 
-    def obs_to_feeddict(self, obs):
-        return {
-            self.ph_minimap_numeric: obs["minimap_numeric"],
-            self.ph_screen_numeric: obs["screen_numeric"],
-            self.ph_available_action_ids: obs["available_actions"],
-            self.ph_screen_unit_type: obs["screen_unit_type"],
-            self.ph_player_relative_screen: obs["player_relative_screen"],
-            self.ph_player_relative_minimap: obs["player_relative_minimap"]
-        }
+    def _input_to_feed_dict(self, input_dict):
+        return {k + ":0": v for k, v in input_dict.items()}
 
     def step(self, obs):
-        feed_dict = self.obs_to_feeddict(obs)
+        feed_dict = self._input_to_feed_dict(obs)
 
-        action_id, spatial_action = self.sess.run(
-            [self.sampled_action_id, self.sampled_spatial_action],
+        action_id, spatial_action, value_estimate = self.sess.run(
+            [self.sampled_action_id, self.sampled_spatial_action, self.value_estimate],
             feed_dict=feed_dict
         )
 
@@ -330,24 +256,12 @@ class A2CAgent:
             np.unravel_index(spatial_action, (self.spatial_dim,) * 2)
         ).transpose()
 
-        return action_id, spatial_action_2d
+        return action_id, spatial_action_2d, value_estimate
 
-    def train(self,
-            n_step_rewards,
-            mb_obs_combined,
-            mb_actions_combined
-    ):
-        feed_dict = {
-            self.ph_value_target: n_step_rewards,
-            self.ph_selected_spatial_action: mb_actions_combined["spatial_action"],
-            self.ph_selected_action_id: mb_actions_combined["action_id"],
-            self.ph_is_spatial_action_available: mb_actions_combined["is_spatial_action_available"]
-        }
-        feed_dict.update(self.obs_to_feeddict(mb_obs_combined))
-
-        # treat each timestep as a separate observation, so batch_size will become batch_size * timesteps
-        feed_dict = {k: combine_first_dimensions(v) for k, v in feed_dict.items()}
+    def train(self, input_dict):
+        feed_dict = self._input_to_feed_dict(input_dict)
         ops = [self.train_op]
+
         write_all_summaries = (
             (self.train_step % self.all_summary_freq == 0) and
             self.summary_path is not None
@@ -367,10 +281,11 @@ class A2CAgent:
         if write_all_summaries or write_scalar_summaries:
             self.summary_writer.add_summary(r[-1], global_step=self.train_step)
 
+
         self.train_step += 1
 
     def get_value(self, obs):
-        feed_dict = self.obs_to_feeddict(obs)
+        feed_dict = self._input_to_feed_dict(obs)
         return self.sess.run(self.value_estimate, feed_dict=feed_dict)
 
     def flush_summaries(self):
@@ -388,3 +303,139 @@ class A2CAgent:
         self.train_step = int(ckpt.model_checkpoint_path.split('-')[-1])
         print("loaded old model with train_step %d" % self.train_step)
         self.train_step += 1
+
+    def update_theta(self):
+        if self.mode == ACMode.PPO:
+            self.sess.run(self.update_theta_op)
+
+
+class FullyConvPolicy:
+    def __init__(self,
+            agent: ActorCriticAgent,
+            trainable: bool = True
+    ):
+        self.placeholders = agent.placeholders
+        self.trainable = trainable
+        self.unittype_emb_dim = agent.unit_type_emb_dim
+
+    def _build_convs(self, inputs, name):
+        conv1 = layers.conv2d(
+            inputs=inputs,
+            data_format="NHWC",
+            num_outputs=16,
+            kernel_size=5,
+            stride=1,
+            padding='SAME',
+            activation_fn=tf.nn.relu,
+            scope="%s/conv1" % name,
+            trainable=self.trainable
+        )
+        conv2 = layers.conv2d(
+            inputs=conv1,
+            data_format="NHWC",
+            num_outputs=32,
+            kernel_size=3,
+            stride=1,
+            padding='SAME',
+            activation_fn=tf.nn.relu,
+            scope="%s/conv2" % name,
+            trainable=self.trainable
+        )
+
+        if self.trainable:
+            layers.summarize_activation(conv1)
+            layers.summarize_activation(conv2)
+
+        return conv2
+
+    def build(self):
+        units_embedded = layers.embed_sequence(
+            self.placeholders.screen_unit_type,
+            vocab_size=SCREEN_FEATURES.unit_type.scale,
+            embed_dim=self.unittype_emb_dim,
+            scope="unit_type_emb",
+            trainable=self.trainable
+        )
+
+        # Let's not one-hot zero which is background
+        player_relative_screen_one_hot = layers.one_hot_encoding(
+            self.placeholders.player_relative_screen,
+            num_classes=SCREEN_FEATURES.player_relative.scale
+        )[:, :, :, 1:]
+        player_relative_minimap_one_hot = layers.one_hot_encoding(
+            self.placeholders.player_relative_minimap,
+            num_classes=MINIMAP_FEATURES.player_relative.scale
+        )[:, :, :, 1:]
+
+        channel_axis = 3
+        screen_numeric_all = tf.concat(
+            [self.placeholders.screen_numeric, units_embedded, player_relative_screen_one_hot],
+            axis=channel_axis
+        )
+        minimap_numeric_all = tf.concat(
+            [self.placeholders.minimap_numeric, player_relative_minimap_one_hot],
+            axis=channel_axis
+        )
+        screen_output = self._build_convs(screen_numeric_all, "screen_network")
+        minimap_output = self._build_convs(minimap_numeric_all, "minimap_network")
+
+        map_output = tf.concat([screen_output, minimap_output], axis=channel_axis)
+
+        spatial_action_logits = layers.conv2d(
+            map_output,
+            data_format="NHWC",
+            num_outputs=1,
+            kernel_size=1,
+            stride=1,
+            activation_fn=None,
+            scope='spatial_action',
+            trainable=self.trainable
+        )
+
+        spatial_action_probs = tf.nn.softmax(layers.flatten(spatial_action_logits))
+
+        map_output_flat = layers.flatten(map_output)
+
+        fc1 = layers.fully_connected(
+            map_output_flat,
+            num_outputs=256,
+            activation_fn=tf.nn.relu,
+            scope="fc1",
+            trainable=self.trainable
+        )
+        action_id_probs = layers.fully_connected(
+            fc1,
+            num_outputs=len(actions.FUNCTIONS),
+            activation_fn=tf.nn.softmax,
+            scope="action_id",
+            trainable=self.trainable
+        )
+        value_estimate = tf.squeeze(layers.fully_connected(
+            fc1,
+            num_outputs=1,
+            activation_fn=None,
+            scope='value',
+            trainable=self.trainable
+        ), axis=1)
+
+        # disregard non-allowed actions by setting zero prob and re-normalizing to 1
+        action_id_probs *= self.placeholders.available_action_ids
+        action_id_probs /= tf.reduce_sum(action_id_probs, axis=1, keep_dims=True)
+
+        def logclip(x):
+            return tf.log(tf.clip_by_value(x, 1e-12, 1.0))
+
+        spatial_action_log_probs = (
+            logclip(spatial_action_probs)
+            * tf.expand_dims(self.placeholders.is_spatial_action_available, axis=1)
+        )
+
+        # non-available actions get log(1e-10) value but that's ok because it's never used
+        action_id_log_probs = logclip(action_id_probs)
+
+        self.value_estimate = value_estimate
+        self.action_id_probs = action_id_probs
+        self.spatial_action_probs = spatial_action_probs
+        self.action_id_log_probs = action_id_log_probs
+        self.spatial_action_log_probs = spatial_action_log_probs
+        return self
