@@ -1,12 +1,11 @@
 import collections
 import os
-
 import numpy as np
 import tensorflow as tf
 from pysc2.lib import actions
-from pysc2.lib.features import SCREEN_FEATURES, MINIMAP_FEATURES
 from tensorflow.contrib import layers
 from tensorflow.contrib.layers.python.layers.optimizers import OPTIMIZER_SUMMARIES
+from actorcritic.policy import FullyConvPolicy
 from common.preprocess import ObsProcesser, FEATURE_KEYS, AgentInputTuple
 from common.util import weighted_random_sample, select_from_each_row, ravel_index_pairs
 
@@ -43,12 +42,12 @@ class ActorCriticAgent:
     _scalar_summary_key = "scalar_summaries"
 
     def __init__(self,
-            sess,
-            summary_path,
-            all_summary_freq,
-            scalar_summary_freq,
-            spatial_dim,
-            mode,
+            sess: tf.Session,
+            summary_path: str,
+            all_summary_freq: int,
+            scalar_summary_freq: int,
+            spatial_dim: int,
+            mode: str,
             clip_epsilon=0.2,
             unit_type_emb_dim=4,
             loss_value_weight=1.0,
@@ -56,30 +55,32 @@ class ActorCriticAgent:
             entropy_weight_action_id=1e-5,
             max_gradient_norm=None,
             optimiser="adam",
-            optimiser_pars=None
+            optimiser_pars: dict = None,
+            policy=FullyConvPolicy
     ):
         """
-        Agent to for learning pysc2-minigames using
-        -a2c: synchronous version https://blog.openai.com/baselines-acktr-a2c/
-            of the original a3c algorithm https://arxiv.org/pdf/1602.01783.pdf
-        - FullyConvPolicy from https://deepmind.com/documents/110/sc2le.pdf
+        Actor-Critic Agent for learning pysc2-minigames
+        https://arxiv.org/pdf/1708.04782.pdf
+        https://github.com/deepmind/pysc2
 
-        Other policies can be specified by overriding or using other function in place of
-        _build_fullyconv_network
+        Can use
+        - A2C https://blog.openai.com/baselines-acktr-a2c/ (synchronous version of A3C)
+        or
+        - PPO https://arxiv.org/pdf/1707.06347.pdf
 
-        some ideas here are borrowed from
-        https://github.com/xhujoy/pysc2-agents
-        but this is still a different implementation
-
-        :param str summary_path: tensorflow summaries will be created here
-        :param int all_summary_freq: how often save all summaries
-        :param int scalar_summary_freq: int, how often save scalar summaries
-        :param int spatial_dim: dimension for both minimap and screen
-        :param float loss_value_weight: value weight for a2c update
-        :param float entropy_weight_spatial: spatial entropy weight for a2c update
-        :param float entropy_weight_action_id: action selection entropy weight for a2c update
-        :param str optimiser: see valid choiches below
-        :param dict optimiser_pars: optional parameters to pass in optimiser
+        :param summary_path: tensorflow summaries will be created here
+        :param all_summary_freq: how often save all summaries
+        :param scalar_summary_freq: int, how often save scalar summaries
+        :param spatial_dim: dimension for both minimap and screen
+        :param mode: a2c or ppo
+        :param clip_epsilon: epsilon for clipping the ratio in PPO (no effect in A2C)
+        :param loss_value_weight: value weight for a2c update
+        :param entropy_weight_spatial: spatial entropy weight for a2c update
+        :param entropy_weight_action_id: action selection entropy weight for a2c update
+        :param max_gradient_norm: global max norm for gradients, if None then not limited
+        :param optimiser: see valid choices below
+        :param optimiser_pars: optional parameters to pass in optimiser
+        :param policy: Policy class
         """
 
         assert optimiser in ["adam", "rmsprop"]
@@ -99,6 +100,7 @@ class ActorCriticAgent:
         self.train_step = 0
         self.max_gradient_norm = max_gradient_norm
         self.clip_epsilon = clip_epsilon
+        self.policy = policy
 
         opt_class = tf.train.AdamOptimizer if optimiser == "adam" else tf.train.RMSPropOptimizer
         if optimiser_pars is None:
@@ -139,7 +141,7 @@ class ActorCriticAgent:
         self.placeholders = _get_placeholders(self.spatial_dim)
 
         with tf.variable_scope("theta"):
-            theta = FullyConvPolicy(self, trainable=True).build()
+            theta = self.policy(self, trainable=True).build()
 
         selected_spatial_action_flat = ravel_index_pairs(
             self.placeholders.selected_spatial_action, self.spatial_dim
@@ -162,7 +164,7 @@ class ActorCriticAgent:
         if self.mode == ACMode.PPO:
             # could also use stop_gradient and forget about the trainable
             with tf.variable_scope("theta_old"):
-                theta_old = FullyConvPolicy(self, trainable=False).build()
+                theta_old = self.policy(self, trainable=False).build()
 
             new_theta_var = tf.global_variables("theta/")
             old_theta_var = tf.global_variables("theta_old/")
@@ -281,7 +283,6 @@ class ActorCriticAgent:
         if write_all_summaries or write_scalar_summaries:
             self.summary_writer.add_summary(r[-1], global_step=self.train_step)
 
-
         self.train_step += 1
 
     def get_value(self, obs):
@@ -307,135 +308,3 @@ class ActorCriticAgent:
     def update_theta(self):
         if self.mode == ACMode.PPO:
             self.sess.run(self.update_theta_op)
-
-
-class FullyConvPolicy:
-    def __init__(self,
-            agent: ActorCriticAgent,
-            trainable: bool = True
-    ):
-        self.placeholders = agent.placeholders
-        self.trainable = trainable
-        self.unittype_emb_dim = agent.unit_type_emb_dim
-
-    def _build_convs(self, inputs, name):
-        conv1 = layers.conv2d(
-            inputs=inputs,
-            data_format="NHWC",
-            num_outputs=16,
-            kernel_size=5,
-            stride=1,
-            padding='SAME',
-            activation_fn=tf.nn.relu,
-            scope="%s/conv1" % name,
-            trainable=self.trainable
-        )
-        conv2 = layers.conv2d(
-            inputs=conv1,
-            data_format="NHWC",
-            num_outputs=32,
-            kernel_size=3,
-            stride=1,
-            padding='SAME',
-            activation_fn=tf.nn.relu,
-            scope="%s/conv2" % name,
-            trainable=self.trainable
-        )
-
-        if self.trainable:
-            layers.summarize_activation(conv1)
-            layers.summarize_activation(conv2)
-
-        return conv2
-
-    def build(self):
-        units_embedded = layers.embed_sequence(
-            self.placeholders.screen_unit_type,
-            vocab_size=SCREEN_FEATURES.unit_type.scale,
-            embed_dim=self.unittype_emb_dim,
-            scope="unit_type_emb",
-            trainable=self.trainable
-        )
-
-        # Let's not one-hot zero which is background
-        player_relative_screen_one_hot = layers.one_hot_encoding(
-            self.placeholders.player_relative_screen,
-            num_classes=SCREEN_FEATURES.player_relative.scale
-        )[:, :, :, 1:]
-        player_relative_minimap_one_hot = layers.one_hot_encoding(
-            self.placeholders.player_relative_minimap,
-            num_classes=MINIMAP_FEATURES.player_relative.scale
-        )[:, :, :, 1:]
-
-        channel_axis = 3
-        screen_numeric_all = tf.concat(
-            [self.placeholders.screen_numeric, units_embedded, player_relative_screen_one_hot],
-            axis=channel_axis
-        )
-        minimap_numeric_all = tf.concat(
-            [self.placeholders.minimap_numeric, player_relative_minimap_one_hot],
-            axis=channel_axis
-        )
-        screen_output = self._build_convs(screen_numeric_all, "screen_network")
-        minimap_output = self._build_convs(minimap_numeric_all, "minimap_network")
-
-        map_output = tf.concat([screen_output, minimap_output], axis=channel_axis)
-
-        spatial_action_logits = layers.conv2d(
-            map_output,
-            data_format="NHWC",
-            num_outputs=1,
-            kernel_size=1,
-            stride=1,
-            activation_fn=None,
-            scope='spatial_action',
-            trainable=self.trainable
-        )
-
-        spatial_action_probs = tf.nn.softmax(layers.flatten(spatial_action_logits))
-
-        map_output_flat = layers.flatten(map_output)
-
-        fc1 = layers.fully_connected(
-            map_output_flat,
-            num_outputs=256,
-            activation_fn=tf.nn.relu,
-            scope="fc1",
-            trainable=self.trainable
-        )
-        action_id_probs = layers.fully_connected(
-            fc1,
-            num_outputs=len(actions.FUNCTIONS),
-            activation_fn=tf.nn.softmax,
-            scope="action_id",
-            trainable=self.trainable
-        )
-        value_estimate = tf.squeeze(layers.fully_connected(
-            fc1,
-            num_outputs=1,
-            activation_fn=None,
-            scope='value',
-            trainable=self.trainable
-        ), axis=1)
-
-        # disregard non-allowed actions by setting zero prob and re-normalizing to 1
-        action_id_probs *= self.placeholders.available_action_ids
-        action_id_probs /= tf.reduce_sum(action_id_probs, axis=1, keep_dims=True)
-
-        def logclip(x):
-            return tf.log(tf.clip_by_value(x, 1e-12, 1.0))
-
-        spatial_action_log_probs = (
-            logclip(spatial_action_probs)
-            * tf.expand_dims(self.placeholders.is_spatial_action_available, axis=1)
-        )
-
-        # non-available actions get log(1e-10) value but that's ok because it's never used
-        action_id_log_probs = logclip(action_id_probs)
-
-        self.value_estimate = value_estimate
-        self.action_id_probs = action_id_probs
-        self.spatial_action_probs = spatial_action_probs
-        self.action_id_log_probs = action_id_log_probs
-        self.spatial_action_log_probs = spatial_action_log_probs
-        return self
