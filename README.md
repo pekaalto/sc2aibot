@@ -106,15 +106,17 @@ However, I don't have enough computation power to verify this rigorously.
 It's also possible that the PPO-parameters here are totally off.
 
 <img src="https://image.ibb.co/dEB0A6/Screen_Shot_2560_11_17_at_11_31_25_AM.png" width="360" height="300">
-
+<br>
+<em>
 Example of training graph using PPO.
 The typical sigmoid shape in A2C training doesn't appear.
 Similar behaviour is observed in other environments.
+</em>
 
 ### Requirements
 - Python 3 (will NOT work with python 2)
 - [pysc2](https://github.com/deepmind/pysc2/) (tested with v1.2)
-- Tensorflow (tested with 1.3.0)
+- Tensorflow (tested with 1.4.0)
 - Other standard python packages like numpy etc.
 
 Code is tested with OS X and Linux. About Windows don't know.
