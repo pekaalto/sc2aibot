@@ -7,8 +7,8 @@ from datetime import datetime
 from functools import partial
 import tensorflow as tf
 from absl import flags
-from a2c.agent import ActorCriticAgent, ACMode
-from a2c.runner import Runner, PPORunParams
+from actorcritic.agent import ActorCriticAgent, ACMode
+from actorcritic.runner import Runner, PPORunParams
 from common.multienv import SubprocVecEnv, make_sc2env, SingleEnv
 
 FLAGS = flags.FLAGS

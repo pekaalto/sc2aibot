@@ -2,7 +2,7 @@ from collections import namedtuple
 
 import numpy as np
 import sys
-from a2c.agent import ActorCriticAgent, ACMode
+from actorcritic.agent import ActorCriticAgent, ACMode
 from common.preprocess import ObsProcesser, ActionProcesser, FEATURE_KEYS
 from common.util import calculate_n_step_reward, general_n_step_advantage, combine_first_dimensions, \
     dict_of_lists_to_list_of_dicst
