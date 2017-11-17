@@ -12,8 +12,12 @@ This project implements the FullyConv reinforcement learning agent
 for [pysc2](https://github.com/deepmind/pysc2/)
 as specified in https://deepmind.com/documents/110/sc2le.pdf.
 
+It's possible to use
+- [A2C](https://blog.openai.com/baselines-acktr-a2c/), which is a synchronous version of [A3C](https://arxiv.org/abs/1602.01783) used in the deepmind paper
+- [PPO](https://arxiv.org/pdf/1707.06347.pdf) (Proximal Policy Optimization)
+
 Differences to the deepmind spec:
-- Use [A2C](https://blog.openai.com/baselines-acktr-a2c/) instead of [A3C](https://arxiv.org/abs/1602.01783)
+- Use A2C or PPO instead of A3C
 - The non-spatial feature-vector is discarded here. (Probably because of this can't learn CollectMineralsAndGas)
 - There are some other minor simplifaction to the observation space
 - Use different hyper-parameters
@@ -22,6 +26,7 @@ Differences to the deepmind spec:
 - And maybe others that I don't know of
 
 ### Results
+The results here were obtained with A2C. See below A2C vs PPO comparison.
 
 <table align="center">
   <tr>
@@ -80,16 +85,31 @@ Might be that at least hyperparameters here are off (and possibly other things).
 
 Other environments seem more stable.
 
+The training was done using one core of Tesla K80 -GPU per environment.
 
 ### How to run
-`python run_a2c.py --map_name MoveToBeacon --model_name my_beacon_model --n_envs 32`
+`python run_agent.py --map_name MoveToBeacon --model_name my_beacon_model --n_envs 32`
 
 This will save
 - tf summaries to `_files/summaries/my_beacon_model/`
 - model to `_files/models/my_beacon_model`
 
-relative to the project path. See `run_a2c.py` for more arguments.
+relative to the project path.
+By default using A2C. To run PPO specify `--agent_mode ppo`.
 
+See `run_agent.py` for more arguments.
+
+### A2C vs PPO
+PPO implementation here gives very similar scores to A2C.
+With PPO the training seem to take considerably longer but is more stable.
+However, I don't have enough computation power to verify this rigorously.
+It's also possible that the PPO-parameters here are totally off.
+
+<img src="https://image.ibb.co/dEB0A6/Screen_Shot_2560_11_17_at_11_31_25_AM.png" width="360" height="300">
+
+Example of training graph using PPO.
+The typical sigmoid shape in A2C training doesn't appear.
+Similar behaviour is observed in other environments.
 
 ### Requirements
 - Python 3 (will NOT work with python 2)
@@ -102,5 +122,5 @@ Let me know if there are issues.
 
 ### References
 I have borrowed some ideas from https://github.com/xhujoy/pysc2-agents (FullyConv-network etc.)
-and [Open AI's baselines](https://github.com/openai/baselines/) but the implementation here is different from those.
+and [Open AI's baselines](https://github.com/openai/baselines/) (A2C and PPO) but the implementation here is different from those.
 For parallel environments using the code from baselines adapted for sc2.

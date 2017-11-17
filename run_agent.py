@@ -44,8 +44,7 @@ flags.DEFINE_enum("agent_mode", ACMode.A2C, [ACMode.A2C, ACMode.PPO], "if should
 
 FLAGS(sys.argv)
 
-# TODO below it gets little messy with the folders, maybe do something more clever
-
+#TODO this runner is maybe too long and too messy..
 full_chekcpoint_path = os.path.join(FLAGS.checkpoint_path, FLAGS.model_name)
 
 if FLAGS.training:
@@ -63,106 +62,110 @@ def check_and_handle_existing_folder(f):
             raise Exception("folder %s already exists" % f)
 
 
-if FLAGS.training:
-    check_and_handle_existing_folder(full_chekcpoint_path)
-    check_and_handle_existing_folder(full_summary_path)
-
-env_args = dict(
-    map_name=FLAGS.map_name,
-    step_mul=FLAGS.step_mul,
-    game_steps_per_episode=0,
-    screen_size_px=(FLAGS.resolution,) * 2,
-    minimap_size_px=(FLAGS.resolution,) * 2,
-    visualize=FLAGS.visualize
-)
-
-envs = SubprocVecEnv((partial(make_sc2env, **env_args),) * FLAGS.n_envs)
-# envs = SingleEnv(make_sc2env(**env_args))
-
-tf.reset_default_graph()
-sess = tf.Session()
-
-agent = ActorCriticAgent(
-    mode=FLAGS.agent_mode,
-    sess=sess,
-    spatial_dim=FLAGS.resolution,
-    unit_type_emb_dim=5,
-    loss_value_weight=FLAGS.loss_value_weight,
-    entropy_weight_action_id=FLAGS.entropy_weight_action,
-    entropy_weight_spatial=FLAGS.entropy_weight_spatial,
-    scalar_summary_freq=FLAGS.scalar_summary_freq,
-    all_summary_freq=FLAGS.all_summary_freq,
-    summary_path=full_summary_path,
-    max_gradient_norm=FLAGS.max_gradient_norm
-)
-
-agent.build_model()
-if os.path.exists(full_chekcpoint_path):
-    agent.load(full_chekcpoint_path)
-else:
-    agent.init()
-
-if FLAGS.n_steps_per_batch is None:
-    n_steps_per_batch = 128 if FLAGS.agent_mode == ACMode.PPO else 8
-else:
-    n_steps_per_batch = FLAGS.n_steps_per_batch
-
-if FLAGS.agent_mode == ACMode.PPO:
-    ppo_par = PPORunParams(
-        FLAGS.ppo_lambda,
-        batch_size=FLAGS.ppo_batch_size or n_steps_per_batch,
-        n_epochs=FLAGS.ppo_epochs
-    )
-else:
-    ppo_par = None
-
-runner = Runner(
-    envs=envs,
-    agent=agent,
-    discount=FLAGS.discount,
-    n_steps=n_steps_per_batch,
-    do_training=FLAGS.training,
-    ppo_par=ppo_par
-)
-
-runner.reset()
-
-if FLAGS.K_batches >= 0:
-    n_batches = FLAGS.K_batches * 1000
-else:
-    n_batches = -1
-
-
 def _print(i):
     print(datetime.now())
     print("# batch %d" % i)
     sys.stdout.flush()
 
 
-def _save_if_training():
+def _save_if_training(agent):
     if FLAGS.training:
         agent.save(full_chekcpoint_path)
         agent.flush_summaries()
         sys.stdout.flush()
 
 
-i = 0
+def main():
+    if FLAGS.training:
+        check_and_handle_existing_folder(full_chekcpoint_path)
+        check_and_handle_existing_folder(full_summary_path)
 
-try:
-    while True:
-        if i % 500 == 0:
-            _print(i)
-        if i % 4000 == 0:
-            _save_if_training()
-        runner.run_batch()
-        i += 1
-        if 0 <= n_batches <= i:
-            break
-except KeyboardInterrupt:
-    pass
+    env_args = dict(
+        map_name=FLAGS.map_name,
+        step_mul=FLAGS.step_mul,
+        game_steps_per_episode=0,
+        screen_size_px=(FLAGS.resolution,) * 2,
+        minimap_size_px=(FLAGS.resolution,) * 2,
+        visualize=FLAGS.visualize
+    )
 
-print("Okay. Work is done")
-_print(i)
-_save_if_training()
+    envs = SubprocVecEnv((partial(make_sc2env, **env_args),) * FLAGS.n_envs)
+    # envs = SingleEnv(make_sc2env(**env_args))
 
-envs.close()
+    tf.reset_default_graph()
+    sess = tf.Session()
+
+    agent = ActorCriticAgent(
+        mode=FLAGS.agent_mode,
+        sess=sess,
+        spatial_dim=FLAGS.resolution,
+        unit_type_emb_dim=5,
+        loss_value_weight=FLAGS.loss_value_weight,
+        entropy_weight_action_id=FLAGS.entropy_weight_action,
+        entropy_weight_spatial=FLAGS.entropy_weight_spatial,
+        scalar_summary_freq=FLAGS.scalar_summary_freq,
+        all_summary_freq=FLAGS.all_summary_freq,
+        summary_path=full_summary_path,
+        max_gradient_norm=FLAGS.max_gradient_norm
+    )
+
+    agent.build_model()
+    if os.path.exists(full_chekcpoint_path):
+        agent.load(full_chekcpoint_path)
+    else:
+        agent.init()
+
+    if FLAGS.n_steps_per_batch is None:
+        n_steps_per_batch = 128 if FLAGS.agent_mode == ACMode.PPO else 8
+    else:
+        n_steps_per_batch = FLAGS.n_steps_per_batch
+
+    if FLAGS.agent_mode == ACMode.PPO:
+        ppo_par = PPORunParams(
+            FLAGS.ppo_lambda,
+            batch_size=FLAGS.ppo_batch_size or n_steps_per_batch,
+            n_epochs=FLAGS.ppo_epochs
+        )
+    else:
+        ppo_par = None
+
+    runner = Runner(
+        envs=envs,
+        agent=agent,
+        discount=FLAGS.discount,
+        n_steps=n_steps_per_batch,
+        do_training=FLAGS.training,
+        ppo_par=ppo_par
+    )
+
+    runner.reset()
+
+    if FLAGS.K_batches >= 0:
+        n_batches = FLAGS.K_batches * 1000
+    else:
+        n_batches = -1
+
+    i = 0
+
+    try:
+        while True:
+            if i % 500 == 0:
+                _print(i)
+            if i % 4000 == 0:
+                _save_if_training(agent)
+            runner.run_batch()
+            i += 1
+            if 0 <= n_batches <= i:
+                break
+    except KeyboardInterrupt:
+        pass
+
+    print("Okay. Work is done")
+    _print(i)
+    _save_if_training(agent)
+
+    envs.close()
+
+
+if __name__ == "__main__":
+    main()
