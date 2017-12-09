@@ -26,42 +26,47 @@ Differences to the deepmind spec:
 - And maybe others that I don't know of
 
 ### Results
-The results here were obtained with A2C. See below A2C vs PPO comparison.
 
 <table align="center">
   <tr>
         <td align="center">Map</td>
-        <td align="center">Avg score</td>
+        <td align="center">Avg score A2C</td>
+        <td align="center">Avg score PPO</td>
         <td align="center">Deepmind avg</td>
     </tr>
     <tr>
         <td align="center">MoveToBeacon</td>
         <td align="center">25</td>
         <td align="center">26</td>
+        <td align="center">26</td>
     </tr>
     <tr>
         <td align="center">CollectMineralShards</td>
         <td align="center">91</td>
+        <td align="center">100</td>
         <td align="center">103</td>
     </tr>
     <tr>
       <td align="center">DefeatZerglingsAndBanelings</td>
       <td align="center">48</td>
+      <td align="center">?</td>
       <td align="center">62</td>
     </tr>
     <tr>
       <td align="center">FindAndDefeatZerglings</td>
       <td align="center">42</td>
       <td align="center">45</td>
+      <td align="center">45</td>
     </tr>
     <tr>
       <td align="center">DefeatRoaches</td>
       <td align="center">70-90</td>
+      <td align="center">?</td>
       <td align="center">100</td>
     </tr>
 </table>
 
-Training graphs:
+Training graphs A2C:
 
 <p float="left">
 <img src="https://image.ibb.co/ih8bT6/Collect_Mineral_Shards.png" width="360" height="300">
@@ -71,6 +76,11 @@ Training graphs:
 <img src="https://preview.ibb.co/kuY1D6/Defeat_Zerglings_And_Banelings.png" width="360" height="300">
 </p>
 
+Training graphs PPO:
+<p float="left">
+<img src="https://preview.ibb.co/dSmRSw/Find_And_Defeat_Zerglings_PPO2.png" width="360" height="300">
+<img src="https://image.ibb.co/if1Mub/Collect_Mineral_Shards_PPO.png" width="360" height="300">
+</p>
 
 * Used the default parameters seen in the repo except:
   * DefeatRoaches, DefeatZerglinsAndBanelings entropy_weights 1e-4/1e-4, n_steps_per_batch 5
@@ -87,6 +97,10 @@ Other environments seem more stable.
 
 The training was done using one core of Tesla K80 -GPU per environment.
 
+With PPO the scores were slightly better than A2C for tested environments. However, the training time was much longer with PPO than with A2C.
+Maybe some other PPO-parameters would give faster training time.
+With PPO the training seems more stable. The typical sigmoid shape in A2C-learning cureves doesn't appear.
+
 ### How to run
 `python run_agent.py --map_name MoveToBeacon --model_name my_beacon_model --n_envs 32`
 
@@ -98,20 +112,6 @@ relative to the project path.
 By default using A2C. To run PPO specify `--agent_mode ppo`.
 
 See `run_agent.py` for more arguments.
-
-### A2C vs PPO
-PPO implementation here gives very similar scores to A2C.
-With PPO the training seem to take considerably longer but is more stable.
-However, I don't have enough computation power to verify this rigorously.
-It's also possible that the PPO-parameters here are totally off.
-
-<img src="https://image.ibb.co/dEB0A6/Screen_Shot_2560_11_17_at_11_31_25_AM.png" width="360" height="300">
-<br>
-<em>
-Example of training graph using PPO.
-The typical sigmoid shape in A2C training doesn't appear.
-Similar behaviour is observed in other environments.
-</em>
 
 ### Requirements
 - Python 3 (will NOT work with python 2)
