@@ -101,6 +101,18 @@ With PPO the scores were slightly better than A2C for tested environments. Howev
 Maybe some other PPO-parameters would give faster training time.
 With PPO the training seems more stable. The typical sigmoid shape in A2C-learning cureves doesn't appear.
 
+##### Note:
+The training is not deterministic and the training time might vary even if nothing is changed.
+For example, I tried to train **MoveToBeacon** 5 times with default parameters and 64 environments.
+Here are the episode numbers when agent achieved score of 27 first time
+```
+4674
+3079
+2355
+1231
+6358
+```
+
 ### How to run
 `python run_agent.py --map_name MoveToBeacon --model_name my_beacon_model --n_envs 32`
 
